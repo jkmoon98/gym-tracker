@@ -139,30 +139,98 @@ const ensureXLSX = () =>
       <circle cx="15" cy="19" r="1"></circle>
     </Icon>;
 
-    // SIMPLEST input possible - just let it work
-    const SimpleInput = ({ value, onChange, placeholder, className }) => {
-      const inputRef = useRef(null);
+    // Fully memoized input that only re-renders when switching rows/exercises  
+    const SimpleInput = memo(({ value, onChange, placeholder, className, inputKey }) => {
+      const [localValue, setLocalValue] = useState(value || "");
+      const onChangeRef = useRef(onChange);
+      const prevInputKeyRef = useRef(inputKey);
+      const valueRef = useRef(value);
+      
+      // Keep value ref updated
+      valueRef.current = value;
+      
+      // Update callback ref (doesn't cause re-render)
+      onChangeRef.current = onChange;
+      
+      // Track mount/unmount
+      useEffect(() => {
+        console.log("🔴 CRITICAL: SimpleInput MOUNTED", { inputKey });
+        return () => {
+          console.log("🔴 CRITICAL: SimpleInput UNMOUNTED (THIS IS THE BUG!)", { inputKey });
+        };
+      }, []);
+      
+      // Reset local value ONLY when inputKey changes (switching rows/exercises)
+      useEffect(() => {
+        if (prevInputKeyRef.current !== inputKey) {
+          console.log("🔴 CRITICAL: inputKey changed - resetting input", { 
+            oldKey: prevInputKeyRef.current, 
+            newKey: inputKey 
+          });
+          prevInputKeyRef.current = inputKey;
+          setLocalValue(valueRef.current || "");
+        }
+      }, [inputKey]); // ONLY depend on inputKey
       
       return (
         <input
-          ref={inputRef}
           className={className}
           placeholder={placeholder}
-          defaultValue={value || ""}
-          onBlur={(e) => {
-            console.log("🔴 onBlur - saving:", e.target.value);
-            onChange(e.target.value);
+          value={localValue}
+          onChange={(e) => {
+            const newValue = e.target.value;
+            setLocalValue(newValue);
+            onChangeRef.current(newValue);
           }}
           onClick={(e) => e.stopPropagation()}
           onMouseDown={(e) => e.stopPropagation()}
-          onFocus={(e) => {
-            console.log("🟣 onFocus");
-            e.stopPropagation();
-          }}
+          onFocus={(e) => e.stopPropagation()}
           autoComplete="off"
         />
       );
-    };
+    }, (prev, next) => {
+      return prev.inputKey === next.inputKey;
+    });
+
+    // Memoized row to prevent re-renders
+    const SetRow = memo(({ row, bucket, setRowField, deleteRow, ex }) => {
+      const isWarmup = bucket === "warmup";
+      
+      return (
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+          <div className={`w-10 text-center text-xs font-semibold rounded-md py-2 ${isWarmup ? 'bg-orange-100 text-orange-700' : 'bg-blue-100 text-blue-700'}`}>
+            {row.label}
+          </div>
+          <SimpleInput
+            inputKey={`${row.id}-weight`}
+            className="flex-1 border rounded-md px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+            placeholder="Weight"
+            value={row.weight}
+            onChange={(val) => setRowField(ex, bucket, row.id, "weight", val)}
+          />
+          <SimpleInput
+            inputKey={`${row.id}-reps`}
+            className="flex-1 border rounded-md px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+            placeholder="Reps"
+            value={row.reps}
+            onChange={(val) => setRowField(ex, bucket, row.id, "reps", val)}
+          />
+          <button 
+            className="p-2 rounded-md bg-red-50 text-red-600 hover:bg-red-100"
+            onClick={() => deleteRow(ex, bucket, row.id)}
+            title={`Delete ${isWarmup ? 'warm-up' : 'working'} set`}>
+            <Trash2 className="w-5 h-5" />
+          </button>
+        </div>
+      );
+    }, (prev, next) => {
+      const shouldBlock = prev.row.id === next.row.id && 
+             prev.row.weight === next.row.weight && 
+             prev.row.reps === next.row.reps &&
+             prev.row.label === next.row.label;
+      
+      return shouldBlock;
+    });
 
     const Home = (p) => <Icon className={p.className}>
       <path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
@@ -607,7 +675,16 @@ const applyingRemoteRef = useRef(false);
       };
 
       const [program, setProgram] = useState(() => getGuestProgram(INITIAL_TEMPLATE_ID));
-      const [logs, setLogs] = useState({});
+      const [logsRaw, setLogsRaw] = useState({});
+      
+      // Wrap setLogs with logging to track all changes
+      const setLogs = useCallback((updater) => {
+        const caller = new Error().stack?.split('\n')[2]?.trim() || 'unknown';
+        console.log("🔴 CRITICAL: setLogs called from:", caller);
+        setLogsRaw(updater);
+      }, []);
+      
+      const logs = logsRaw;
 
       // --- Draft vs saved state: only persist when user clicks Save ---
       const savedJsonRef = useRef(null);
@@ -627,19 +704,37 @@ const applyingRemoteRef = useRef(false);
       const clearAllDirty = useCallback(() => setDirtyByExId({}), []);
 
 // When logged out, switching templates should immediately swap the program.
+// When logged out (guest mode), switching templates should load the new template program
+// Track previous templateId to prevent unnecessary resets
+const prevTemplateIdRef = useRef(null);
+const hasInitializedRef = useRef(false);
+
 useEffect(() => {
+  // Don't run if logged in
   if (user) return;
+  
+  // Don't run if already initialized and templateId hasn't changed
+  if (hasInitializedRef.current && prevTemplateIdRef.current === templateId) {
+    return;
+  }
+  
+  const isFirstRun = !hasInitializedRef.current;
+  console.log("🔴 CRITICAL: Template reset triggered", { isFirstRun, templateId });
+  
+  prevTemplateIdRef.current = templateId;
+  hasInitializedRef.current = true;
+  
   const next = getGuestProgram(templateId);
   setProgram(next);
   setLogs({});
   setWeek(1);
   setDay("Monday");
   setExpandedExId(null);
-  clearAllDirty();
+  setDirtyByExId({});
   try {
     savedJsonRef.current = JSON.stringify({ program: next, logs: {}, week: 1, day: "Monday" });
   } catch {}
-}, [templateId, user, getGuestProgram, clearAllDirty]);
+}, [templateId, user]); // ONLY depend on templateId and user, nothing else!
 
 // When logged in, switching templates should load that template's own saved state (separate logs).
 useEffect(() => {
@@ -1123,14 +1218,12 @@ const updateExerciseLog = (ex, updater) => {
   markDirty(ex.id);
 
   setLogs((prev) => {
-    const defaultWorking = ex.defaultWorking ?? 2;
-
-    // Shallow-copy only the path we need (FAST)
     const next = { ...(prev || {}) };
     const weekObj = { ...(next[week] || {}) };
     const dayObj = { ...(weekObj[day] || {}) };
 
-    const current = dayObj[ex.id] || makeEmptyExerciseLog(defaultWorking);
+    // CRITICAL FIX: Use getExerciseLog to get cached version with stable IDs!
+    const current = dayObj[ex.id] || getExerciseLog(ex);
     dayObj[ex.id] = updater(current);
 
     weekObj[day] = dayObj;
@@ -1142,12 +1235,41 @@ const updateExerciseLog = (ex, updater) => {
 
       const getExerciseLog = (ex) => {
         const entry = logs?.[week]?.[day]?.[ex.id];
-        if (entry) return entry;
+        
+        const logCheck = {
+          exId: ex.id,
+          exName: ex.name,
+          week,
+          day,
+          hasLogs: !!logs,
+          hasWeek: !!logs?.[week],
+          hasDay: !!logs?.[week]?.[day],
+          hasExercise: !!entry,
+          foundEntry: !!entry
+        };
+        
+        if (!entry) {
+          console.log("❌ getExerciseLog - DATA NOT FOUND, creating new cache:", logCheck);
+        } else {
+          console.log("✅ getExerciseLog - Found existing data:", logCheck);
+        }
+        
+        if (entry) {
+          return entry;
+        }
         
         // Create a stable empty log for this exercise (cached)
         const cacheKey = `${week}-${day}-${ex.id}`;
         if (!emptyLogCache.current[cacheKey]) {
-          emptyLogCache.current[cacheKey] = makeEmptyExerciseLog(ex.defaultWorking ?? 2);
+          const newLog = makeEmptyExerciseLog(ex.defaultWorking ?? 2);
+          console.log("🔴 CRITICAL: Creating NEW cache with NEW row IDs!", { 
+            exId: ex.id, 
+            exName: ex.name,
+            cacheKey,
+            warmupIds: newLog.warmup.map(r => r.id),
+            workingIds: newLog.working.map(r => r.id)
+          });
+          emptyLogCache.current[cacheKey] = newLog;
         }
         return emptyLogCache.current[cacheKey];
       };
@@ -1920,28 +2042,14 @@ return (
 
                               <div className="space-y-2">
                                 {(state.warmup || []).map((row) => (
-                                  <div key={row.id} className="flex flex-col sm:flex-row sm:items-center gap-3">
-                                    <div className="w-10 text-center text-xs font-semibold bg-orange-100 text-orange-700 rounded-md py-2">
-                                      {row.label}
-                                    </div>
-                                    <SimpleInput
-                                      className="flex-1 border rounded-md px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:outline-none" 
-                                      placeholder="Weight"
-                                      value={row.weight}
-                                      onChange={(val) => setRowField(ex, "warmup", row.id, "weight", val)}
-                                    />
-                                    <SimpleInput
-                                      className="flex-1 border rounded-md px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:outline-none" 
-                                      placeholder="Reps"
-                                      value={row.reps}
-                                      onChange={(val) => setRowField(ex, "warmup", row.id, "reps", val)}
-                                    />
-                                    <button className="p-2 rounded-md bg-red-50 text-red-600 hover:bg-red-100"
-                                            onClick={() => deleteRow(ex, "warmup", row.id)}
-                                            title="Delete warm-up set">
-                                      <Trash2 className="w-5 h-5" />
-                                    </button>
-                                  </div>
+                                  <SetRow 
+                                    key={row.id}
+                                    row={row}
+                                    bucket="warmup"
+                                    setRowField={setRowField}
+                                    deleteRow={deleteRow}
+                                    ex={ex}
+                                  />
                                 ))}
                               </div>
                             </div>
@@ -1959,28 +2067,14 @@ return (
 
                               <div className="space-y-2">
                                 {(state.working || []).map((row) => (
-                                  <div key={row.id} className="flex flex-col sm:flex-row sm:items-center gap-3">
-                                    <div className="w-10 text-center text-xs font-semibold bg-blue-100 text-blue-700 rounded-md py-2">
-                                      {row.label}
-                                    </div>
-                                    <SimpleInput
-                                      className="flex-1 border rounded-md px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:outline-none" 
-                                      placeholder="Weight"
-                                      value={row.weight}
-                                      onChange={(val) => setRowField(ex, "working", row.id, "weight", val)}
-                                    />
-                                    <SimpleInput
-                                      className="flex-1 border rounded-md px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:outline-none" 
-                                      placeholder="Reps"
-                                      value={row.reps}
-                                      onChange={(val) => setRowField(ex, "working", row.id, "reps", val)}
-                                    />
-                                    <button className="p-2 rounded-md bg-red-50 text-red-600 hover:bg-red-100"
-                                            onClick={() => deleteRow(ex, "working", row.id)}
-                                            title="Delete working set">
-                                      <Trash2 className="w-5 h-5" />
-                                    </button>
-                                  </div>
+                                  <SetRow 
+                                    key={row.id}
+                                    row={row}
+                                    bucket="working"
+                                    setRowField={setRowField}
+                                    deleteRow={deleteRow}
+                                    ex={ex}
+                                  />
                                 ))}
                               </div>
                             </div>
