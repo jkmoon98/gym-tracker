@@ -1,5 +1,6 @@
 # Firebase
 .firebase/
+firebase.config.js
 
 # OS
 .DS_Store

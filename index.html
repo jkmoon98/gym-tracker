@@ -13,6 +13,8 @@
   <!-- SheetJS for Excel import/export -->
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.19.3/dist/xlsx.full.min.js"></script>
 
+  <!-- Optional: create firebase.config.js from firebase.config.example.js to enable cloud sync (404 here is ok) -->
+  <script src="/firebase.config.js"></script>
   <!-- Firebase (for Google login + cloud sync) -->
   <script src="https://www.gstatic.com/firebasejs/12.7.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/12.7.0/firebase-auth-compat.js"></script>
@@ -39,15 +41,16 @@
     // 3) Enable Authentication -> Google
     // 4) Create Firestore Database (in production mode is fine)
     //
-    // If you leave apiKey as "REPLACE_ME", the app will run in local-only mode.
-    
-    const FIREBASE_CONFIG = {
-  apiKey: "AIzaSyA1dZfw8EYLUiR51Y2w_eHGWc7dQPKLzsM",
-  authDomain: "gym-tracker-3b7eb.firebaseapp.com",
-  projectId: "gym-tracker-3b7eb",
-  storageBucket: "gym-tracker-3b7eb.firebasestorage.app",
-  messagingSenderId: "513816852608",
-  appId: "1:513816852608:web:337969bd9a465af3c30e65"
+    // Safe API practice: Do NOT commit real keys. Use one of:
+    // 1) Load a gitignored script that sets window.__FIREBASE_CONFIG__ (see firebase.config.example.js)
+    // 2) Leave apiKey as "REPLACE_ME" for local-only mode (no cloud sync).
+    const FIREBASE_CONFIG = (typeof window !== "undefined" && window.__FIREBASE_CONFIG__) || {
+      apiKey: "REPLACE_ME",
+      authDomain: "your-project.firebaseapp.com",
+      projectId: "your-project",
+      storageBucket: "your-project.firebasestorage.app",
+      messagingSenderId: "",
+      appId: ""
     };
 
     const firebaseReady = () =>
@@ -152,25 +155,13 @@ const ensureXLSX = () =>
       // Update callback ref (doesn't cause re-render)
       onChangeRef.current = onChange;
       
-      // Track mount/unmount
-      useEffect(() => {
-        console.log("🔴 CRITICAL: SimpleInput MOUNTED", { inputKey });
-        return () => {
-          console.log("🔴 CRITICAL: SimpleInput UNMOUNTED (THIS IS THE BUG!)", { inputKey });
-        };
-      }, []);
-      
       // Reset local value ONLY when inputKey changes (switching rows/exercises)
       useEffect(() => {
         if (prevInputKeyRef.current !== inputKey) {
-          console.log("🔴 CRITICAL: inputKey changed - resetting input", { 
-            oldKey: prevInputKeyRef.current, 
-            newKey: inputKey 
-          });
           prevInputKeyRef.current = inputKey;
           setLocalValue(valueRef.current || "");
         }
-      }, [inputKey]); // ONLY depend on inputKey
+      }, [inputKey]);
       
       return (
         <input
@@ -300,9 +291,11 @@ const ensureXLSX = () =>
             rowsProgram.push({
               Week: w,
               Day: d,
+              ExerciseId: ex.id,
               Exercise: ex.name,
               Sets: ex.sets || "",
               Reps: ex.reps || "",
+              DefaultWorking: ex.defaultWorking ?? 2,
               Alternatives: (ex.alternatives || []).join("|"),
             });
           }
@@ -369,15 +362,16 @@ const ensureXLSX = () =>
               const w = Number(r.Week);
               const d = String(r.Day || "");
               if (!w || w < 1 || w > 12 || !DAYS.includes(d)) continue;
+              const name = String(r.Exercise || r.ExerciseName || "").trim();
+              if (!name) continue;
               const ex = {
                 id: String(r.ExerciseId || uuid()),
-                name: String(r.ExerciseName || "").trim(),
+                name,
                 sets: String(r.Sets || ""),
                 reps: String(r.Reps || ""),
                 defaultWorking: Number(r.DefaultWorking || 2),
                 alternatives: String(r.Alternatives || "").split("|").map(s => s.trim()).filter(Boolean),
               };
-              if (!ex.name) continue;
               fresh[w][d].push(ex);
             }
 
@@ -402,7 +396,7 @@ const ensureXLSX = () =>
               entry.notes = String(r.Notes || "");
 
               const type = String(r.SetType || "").toLowerCase();
-              const label = String(r.SetLabel || "");
+              const label = String(r.Set || r.SetLabel || "");
               if (!type || !label) continue;
 
               const rowObj = { id: uuid(), label, weight: String(r.Weight || ""), reps: String(r.Reps || "") };
@@ -677,12 +671,7 @@ const applyingRemoteRef = useRef(false);
       const [program, setProgram] = useState(() => getGuestProgram(INITIAL_TEMPLATE_ID));
       const [logsRaw, setLogsRaw] = useState({});
       
-      // Wrap setLogs with logging to track all changes
-      const setLogs = useCallback((updater) => {
-        const caller = new Error().stack?.split('\n')[2]?.trim() || 'unknown';
-        console.log("🔴 CRITICAL: setLogs called from:", caller);
-        setLogsRaw(updater);
-      }, []);
+      const setLogs = useCallback((updater) => setLogsRaw(updater), []);
       
       const logs = logsRaw;
 
@@ -717,9 +706,6 @@ useEffect(() => {
   if (hasInitializedRef.current && prevTemplateIdRef.current === templateId) {
     return;
   }
-  
-  const isFirstRun = !hasInitializedRef.current;
-  console.log("🔴 CRITICAL: Template reset triggered", { isFirstRun, templateId });
   
   prevTemplateIdRef.current = templateId;
   hasInitializedRef.current = true;
@@ -1235,41 +1221,10 @@ const updateExerciseLog = (ex, updater) => {
 
       const getExerciseLog = (ex) => {
         const entry = logs?.[week]?.[day]?.[ex.id];
-        
-        const logCheck = {
-          exId: ex.id,
-          exName: ex.name,
-          week,
-          day,
-          hasLogs: !!logs,
-          hasWeek: !!logs?.[week],
-          hasDay: !!logs?.[week]?.[day],
-          hasExercise: !!entry,
-          foundEntry: !!entry
-        };
-        
-        if (!entry) {
-          console.log("❌ getExerciseLog - DATA NOT FOUND, creating new cache:", logCheck);
-        } else {
-          console.log("✅ getExerciseLog - Found existing data:", logCheck);
-        }
-        
-        if (entry) {
-          return entry;
-        }
-        
-        // Create a stable empty log for this exercise (cached)
+        if (entry) return entry;
         const cacheKey = `${week}-${day}-${ex.id}`;
         if (!emptyLogCache.current[cacheKey]) {
-          const newLog = makeEmptyExerciseLog(ex.defaultWorking ?? 2);
-          console.log("🔴 CRITICAL: Creating NEW cache with NEW row IDs!", { 
-            exId: ex.id, 
-            exName: ex.name,
-            cacheKey,
-            warmupIds: newLog.warmup.map(r => r.id),
-            workingIds: newLog.working.map(r => r.id)
-          });
-          emptyLogCache.current[cacheKey] = newLog;
+          emptyLogCache.current[cacheKey] = makeEmptyExerciseLog(ex.defaultWorking ?? 2);
         }
         return emptyLogCache.current[cacheKey];
       };
@@ -2158,7 +2113,7 @@ return (
                   <button className="w-full bg-red-600 hover:bg-red-700 text-white font-semibold py-3 rounded-lg"
                           onClick={() => {
                             if (!confirm("Reset logs (keep program)?")) return;
-                            setProgram(getGuestProgram(templateOriginId || templateId || DEFAULT_TEMPLATE_ID));
+                            setProgram(getGuestProgram(templateId || (typeof window !== "undefined" && window.DEFAULT_TEMPLATE_ID) || "nippard_ppl"));
                             setLogs({});
                             setWeek(1);
                             setDay("Monday");
