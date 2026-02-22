@@ -14,7 +14,7 @@
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.19.3/dist/xlsx.full.min.js"></script>
 
   <!-- Optional: create firebase.config.js from firebase.config.example.js to enable cloud sync (404 here is ok) -->
-  <script src="/firebase.config.js"></script>
+  <script src="firebase.config.js"></script>
   <!-- Firebase (for Google login + cloud sync) -->
   <script src="https://www.gstatic.com/firebasejs/12.7.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/12.7.0/firebase-auth-compat.js"></script>
@@ -23,8 +23,8 @@
 
 <body class="bg-gray-100">
   <div id="root"></div>
-<script src="/nippard.js"></script>
-<script src="/rp.js"></script>
+<script src="nippard.js"></script>
+<script src="rp.js"></script>
 
 <script>
   // Aliases so existing app code can keep using these names.
@@ -250,6 +250,7 @@ const ensureXLSX = () =>
     // ---------- Constants ----------
     const STORAGE_KEY_BASE = "gymTracker_prefilled_from_excel_v1";
     const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+    const WEEKS = Array.from({ length: 12 }, (_, i) => i + 1);
     const WORKOUT_TYPES = {
       Monday: "Upper Strength (Focus)",
       Tuesday: "Lower Strength (Focus)",
@@ -552,6 +553,14 @@ const getTemplateById = useCallback((id) => {
   const list = Array.isArray(window.PROGRAM_TEMPLATES) ? window.PROGRAM_TEMPLATES : [];
   return list.find(t => t && t.id === id) || list[0] || null;
 }, []);
+
+// Get template exercise for current week/day by name (so Target Sets/Reps match template, not global catalog).
+const getTemplateExerciseForDay = useCallback((templateId, week, day, exerciseName) => {
+  const t = getTemplateById(templateId);
+  const arr = t?.program?.[week]?.[day];
+  if (!Array.isArray(arr)) return null;
+  return arr.find(e => e && String(e.name).trim() === String(exerciseName).trim()) || null;
+}, [getTemplateById]);
 
 
 const getTemplateNameById = useCallback((id) => {
@@ -878,6 +887,10 @@ if (tpl.program) setProgram(ensureExerciseMeta(tpl.program));
       const [customReps, setCustomReps] = useState("");
 const [showAdd, setShowAdd] = useState(false);
 const [addName, setAddName] = useState((exerciseList?.[0]) || "");
+      // Add-exercise target: "current" | "specific" | "all"
+      const [addTarget, setAddTarget] = useState("current");
+      const [addTargetWeek, setAddTargetWeek] = useState(1);
+      const [addTargetDay, setAddTargetDay] = useState("Monday");
       const fileInputRef = useRef(null);
 
       useEffect(() => {
@@ -1344,26 +1357,30 @@ setLogs(prev => {
 
       const discardExercise = (ex) => {
         const saved = getSavedState();
-        if (!saved) return;
         const savedEx = saved?.program?.[week]?.[day]?.find?.(e => e.id === ex.id);
         const savedLog = saved?.logs?.[week]?.[day]?.[ex.id];
 
-        if (savedEx) {
+        const templateEx = getTemplateExerciseForDay(templateId, week, day, ex.name);
+        const revertEx = savedEx || (templateEx ? { ...templateEx, id: ex.id } : null);
+
+        if (revertEx) {
           setProgram(prev => {
             const next = structuredClone(prev);
             if (!next[week]) next[week] = {};
             if (!next[week][day]) next[week][day] = [];
             const arr2 = next[week][day];
             const idx2 = arr2.findIndex(e => e.id === ex.id);
-            if (idx2 >= 0) arr2[idx2] = savedEx;
-            else arr2.push(savedEx);
+            if (idx2 >= 0) arr2[idx2] = revertEx;
+            else arr2.push(revertEx);
             next[week][day] = arr2;
-            return next;
+            return ensureExerciseMeta(next);
           });
         }
+
+        const defaultWorking = revertEx?.defaultWorking ?? ex.defaultWorking ?? 2;
         setLogs(prev => {
-          const next = ensureLogPath(prev, week, day, ex.id, ex.defaultWorking ?? 2);
-          next[week][day][ex.id] = savedLog || makeEmptyExerciseLog(ex.defaultWorking ?? 2);
+          const next = ensureLogPath(prev, week, day, ex.id, defaultWorking);
+          next[week][day][ex.id] = savedLog || makeEmptyExerciseLog(defaultWorking);
           return next;
         });
         clearDirty(ex.id);
@@ -1465,25 +1482,39 @@ const addExerciseToDay = () => {
 
   const base = (!isCustom ? (exerciseMap[name] || {}) : (exerciseMap[name] || {}));
 
-  const sets = overrideSets !== "" ? overrideSets : (base.sets || "");
-  const reps = overrideReps !== "" ? overrideReps : (base.reps || "");
-
-  const currentArr = program?.[week]?.[day] || [];
-  const maxOrder = currentArr.reduce((m, e) => Math.max(m, (e.order ?? 0)), -1);
-
-  const ex = {
-    id: uuid(),
-    order: maxOrder + 1,
-    name,
-    sets,
-    reps,
-    defaultWorking: base.defaultWorking ?? 2,
-    alternatives: base.alternatives || [],
-  };
+  // Resolve target week/day pairs
+  const pairs = (() => {
+    if (addTarget === "current") return [[week, day]];
+    if (addTarget === "specific") return [[addTargetWeek, addTargetDay]];
+    // "all" -> every week and day
+    const list = [];
+    for (const w of WEEKS) for (const d of DAYS) list.push([w, d]);
+    return list;
+  })();
 
   setProgram((prev) => {
     const next = structuredClone(prev);
-    next[week][day].push(ex);
+    for (const [w, d] of pairs) {
+      const templateEx = getTemplateExerciseForDay(templateId, w, d, name);
+      const src = templateEx || base;
+      const sets = overrideSets !== "" ? overrideSets : (src.sets || base.sets || "");
+      const reps = overrideReps !== "" ? overrideReps : (src.reps || base.reps || "");
+      const defaultWorking = src.defaultWorking ?? base.defaultWorking ?? 2;
+      if (!next[w]) next[w] = {};
+      if (!next[w][d]) next[w][d] = [];
+      const arr = next[w][d];
+      const maxOrder = arr.reduce((m, e) => Math.max(m, (e.order ?? 0)), -1);
+      const ex = {
+        id: uuid(),
+        order: maxOrder + 1,
+        name,
+        sets,
+        reps,
+        defaultWorking,
+        alternatives: (Array.isArray(src.alternatives) && src.alternatives.length) ? src.alternatives : (base.alternatives || []),
+      };
+      next[w][d].push(ex);
+    }
     return next;
   });
 
@@ -1705,6 +1736,45 @@ const addExerciseToDay = () => {
                         </button>
                       </div>
 
+                      <div className="w-full border-t pt-3 mt-1 flex flex-wrap gap-3 items-end">
+                        <div>
+                          <div className="text-xs text-gray-500 mb-1">Add to</div>
+                          <select
+                            className="border rounded-md px-3 py-2 bg-white"
+                            value={addTarget}
+                            onChange={(e) => setAddTarget(e.target.value)}
+                          >
+                            <option value="current">Current (Week {week}, {day})</option>
+                            <option value="specific">Choose week &amp; day…</option>
+                            <option value="all">All workouts (every week &amp; day)</option>
+                          </select>
+                        </div>
+                        {addTarget === "specific" && (
+                          <>
+                            <div>
+                              <div className="text-xs text-gray-500 mb-1">Week</div>
+                              <select
+                                className="border rounded-md px-3 py-2 bg-white"
+                                value={addTargetWeek}
+                                onChange={(e) => setAddTargetWeek(Number(e.target.value))}
+                              >
+                                {WEEKS.map(w => (<option key={w} value={w}>Week {w}</option>))}
+                              </select>
+                            </div>
+                            <div>
+                              <div className="text-xs text-gray-500 mb-1">Day</div>
+                              <select
+                                className="border rounded-md px-3 py-2 bg-white"
+                                value={addTargetDay}
+                                onChange={(e) => setAddTargetDay(e.target.value)}
+                              >
+                                {DAYS.map(d => (<option key={d} value={d}>{d}</option>))}
+                              </select>
+                            </div>
+                          </>
+                        )}
+                      </div>
+
                       <button className="px-4 py-2 rounded-lg bg-green-600 text-white hover:bg-green-700"
                               onClick={addExerciseToDay}>
                         Add
@@ -1796,7 +1866,9 @@ return (
                           )}
 
                           <button className="px-4 text-red-600 hover:bg-red-50 border-l"
-                                  onClick={(e) => safeTap(e, () => removeExercise(ex.id))}
+                                  onClick={(e) => safeTap(e, () => {
+                                    if (confirm("Remove \"" + (ex.name || "this exercise") + "\" from this day? This cannot be undone.")) removeExercise(ex.id);
+                                  })}
                                   title="Remove exercise">
                             <Trash2 className="w-5 h-5" />
                           </button>
@@ -1835,7 +1907,9 @@ return (
                                   }
 
                                   const newName = selected;
+                                  const templateEx = getTemplateExerciseForDay(templateId, week, day, newName);
                                   const base = exerciseMap[newName] || {};
+                                  const src = templateEx || base;
                                   setProgram(prev => {
                                     const next = structuredClone(prev);
                                     const arr = next[week][day] || [];
@@ -1844,10 +1918,10 @@ return (
                                       arr[i] = {
                                         ...arr[i],
                                         name: newName,
-                                        sets: (base.sets !== undefined && base.sets !== "") ? base.sets : arr[i].sets,
-                                        reps: (base.reps !== undefined && base.reps !== "") ? base.reps : arr[i].reps,
-                                        defaultWorking: (base.defaultWorking ?? arr[i].defaultWorking),
-                                        alternatives: (Array.isArray(base.alternatives) && base.alternatives.length) ? base.alternatives : arr[i].alternatives,
+                                        sets: (src.sets !== undefined && src.sets !== "") ? String(src.sets) : arr[i].sets,
+                                        reps: (src.reps !== undefined && src.reps !== "") ? String(src.reps) : arr[i].reps,
+                                        defaultWorking: (src.defaultWorking ?? base.defaultWorking ?? arr[i].defaultWorking) ?? 2,
+                                        alternatives: (Array.isArray(src.alternatives) && src.alternatives.length) ? src.alternatives : (Array.isArray(base.alternatives) && base.alternatives.length) ? base.alternatives : arr[i].alternatives,
                                       };
                                     }
                                     return next;
@@ -2052,7 +2126,9 @@ return (
 
                             <div className="mt-5">
                               <button className={"w-full bg-gray-700 hover:bg-gray-600 text-white py-2 rounded-lg " + (isDirty(ex.id) ? "" : "opacity-60 cursor-not-allowed")}
-                                      onClick={() => discardExercise(ex)}
+                                      onClick={() => {
+                                        if (confirm("Discard your changes to \"" + (ex.name || "this exercise") + "\"? Sets, reps, and logged weights will revert to the last saved state.")) discardExercise(ex);
+                                      }}
                                       disabled={!isDirty(ex.id)}>
                                 Discard changes
                               </button>
