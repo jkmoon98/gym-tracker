@@ -1809,6 +1809,45 @@ const addExerciseToDay = () => {
                         >
                           Restore dropdown list
                         </button>
+                        <button
+                          type="button"
+                          className="text-sm text-gray-500 hover:text-gray-700 underline"
+                          onClick={() => {
+                            if (!confirm("Restore only deleted exercises? Any exercises you removed will be added back. Workouts you added yourself will be kept. Your logs are kept.")) return;
+                            const tpl = getTemplateById(templateId);
+                            const tplProgram = tpl?.program || {};
+                            const newProgram = structuredClone(program);
+                            for (const w of WEEKS) {
+                              for (const d of DAYS) {
+                                const tArr = tplProgram[w]?.[d] || [];
+                                const cArr = newProgram[w]?.[d] || [];
+                                const templateNames = new Set(tArr.map(e => e.name));
+                                const currentByName = new Map(cArr.map(e => [e.name, e]));
+                                const merged = [];
+                                for (const ex of tArr) {
+                                  if (currentByName.has(ex.name)) merged.push(currentByName.get(ex.name));
+                                  else merged.push({ ...ex, id: (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : "r-" + w + "-" + d + "-" + Date.now() + "-" + Math.random().toString(36).slice(2) });
+                                }
+                                for (const ex of cArr) {
+                                  if (!templateNames.has(ex.name)) merged.push(ex);
+                                }
+                                if (!newProgram[w]) newProgram[w] = {};
+                                newProgram[w][d] = merged;
+                              }
+                            }
+                            const normalized = ensureExerciseMeta(newProgram);
+                            setProgram(normalized);
+                            const json = JSON.stringify({ program: normalized, logs, week, day });
+                            savedJsonRef.current = json;
+                            lastCloudJsonRef.current = json;
+                            clearOrderDraft();
+                            clearAllDirty();
+                            alert("Deleted exercises restored. Your added workouts were kept.");
+                          }}
+                          title="Add back only the exercises you removed; keep any you added"
+                        >
+                          Restore workouts to template
+                        </button>
                       </div>
 
                       <div className="w-full border-t pt-3 mt-1 flex flex-wrap gap-3 items-end">
