@@ -896,7 +896,7 @@ const [addName, setAddName] = useState((exerciseList?.[0]) || "");
       useEffect(() => {
         const dayMap = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
         const today = dayMap[new Date().getDay()];
-        const initialDay = DAYS.includes(today) ? today : "Monday";
+        const initialDay = DAYS.includes(today) ? today : "Friday";
         setDay(initialDay);
 
         // Guest mode baseline (no login): start from hardcoded defaults every refresh.
@@ -1100,6 +1100,37 @@ try { localStorage.setItem(TEMPLATE_ID_KEY, activeId); } catch {}
         })();
       }, [user]);
 
+      // Guest mode: restore program/logs/week/day from localStorage after other init (so refresh keeps your data).
+      const guestStorageLoadedRef = useRef(false);
+      useEffect(() => {
+        if (user !== null) {
+          guestStorageLoadedRef.current = false;
+          return;
+        }
+        if (guestStorageLoadedRef.current) return;
+        guestStorageLoadedRef.current = true;
+        try {
+          const raw = localStorage.getItem(STORAGE_KEY);
+          if (!raw) return;
+          const data = JSON.parse(raw);
+          if (!data || (!data.program && !data.logs)) return;
+          if (data.program) setProgram(ensureExerciseMeta(data.program));
+          if (data.logs) setLogs(data.logs);
+          if (typeof data.week === "number" && data.week >= 1 && data.week <= 12) setWeek(data.week);
+          savedJsonRef.current = raw;
+        } catch (_) {}
+      }, [user, STORAGE_KEY]);
+
+      // Guest mode: persist program/logs/week/day to localStorage (debounced) so refresh keeps data.
+      useEffect(() => {
+        if (user !== null) return;
+        const payload = JSON.stringify({ program, logs, week, day });
+        const t = setTimeout(() => {
+          try { localStorage.setItem(STORAGE_KEY, payload); } catch (_) {}
+        }, 800);
+        return () => clearTimeout(t);
+      }, [program, logs, week, day, user, STORAGE_KEY]);
+
       // Persist program/logs/week/day implicitly (debounced) to reduce lag
 useEffect(() => {
         localStorage.setItem(CATALOG_KEY, JSON.stringify({ list: exerciseList, map: exerciseMap }));
@@ -1281,6 +1312,8 @@ const updateExerciseLog = (ex, updater) => {
       };
 
       const deleteRow = (ex, bucket, rowId) => {
+        const isWarmup = bucket === "warmup";
+        if (!confirm("Remove this " + (isWarmup ? "warm-up" : "working") + " set?")) return;
         const before = getExerciseLog(ex);
         const beforeWorkingCount = (before.working || []).length;
 
@@ -1395,15 +1428,36 @@ setLogs(prev => {
         clearOrderDraft();
       };
 
-      const removeExercise = (exId) => {
+      const removeExercise = (exId, fromWeeks, exerciseName) => {
+        const weeksToRemove = fromWeeks === "all" ? Array.from({ length: 12 }, (_, i) => i + 1) : Array.isArray(fromWeeks) ? fromWeeks : [week];
+        const name = (exerciseName || "").trim();
+        const idsByWeek = {};
+        for (const w of weeksToRemove) {
+          if (w === week) idsByWeek[w] = [exId];
+          else {
+            const arr = program?.[w]?.[day] || [];
+            idsByWeek[w] = arr.filter(e => (e.name || "").trim() === name).map(e => e.id);
+          }
+        }
         setProgram(prev => {
           const next = structuredClone(prev);
-          next[week][day] = (next[week][day] || []).filter(e => e.id !== exId);
+          for (const w of weeksToRemove) {
+            if (!next[w]?.[day]) continue;
+            if (w === week) {
+              next[w][day] = (next[w][day] || []).filter(e => e.id !== exId);
+            } else {
+              next[w][day] = (next[w][day] || []).filter(e => (e.name || "").trim() !== name);
+            }
+          }
           return next;
         });
         setLogs(prev => {
           const next = structuredClone(prev);
-          if (next?.[week]?.[day]?.[exId]) delete next[week][day][exId];
+          for (const w of weeksToRemove) {
+            const ids = idsByWeek[w] || [];
+            if (!next[w]?.[day] || !ids.length) continue;
+            for (const id of ids) { if (next[w][day][id]) delete next[w][day][id]; }
+          }
           return next;
         });
         if (expandedExId === exId) setExpandedExId(null);
@@ -1475,6 +1529,8 @@ const addExerciseToDay = () => {
   const isCustom = !!typedName;
 
   const name = isCustom ? typedName : addName;
+  if (!name) return;
+  if (!confirm("Add \"" + name + "\" to " + day + "?")) return;
 
   // Prefer explicit inputs when present
   const overrideSets = (customSets || "").trim();
@@ -1536,11 +1592,6 @@ const addExerciseToDay = () => {
 };
 
 
-      const finishWorkout = () => {
-        setExpandedExId(null);
-        alert("Workout marked complete (data saved locally).");
-      };
-
       const onClickImport = () => fileInputRef.current?.click();
       const onFilePicked = (e) => {
         const file = e.target.files?.[0];
@@ -1575,7 +1626,7 @@ const addExerciseToDay = () => {
   <select
     className="w-full sm:w-auto bg-blue-700 px-4 py-2 sm:py-1 rounded-full text-sm text-white focus:outline-none"
     value={day}
-    onChange={(e) => { discardAllDrafts(); setDay(e.target.value); setExpandedExId(null); }}
+    onChange={(e) => { clearOrderDraft(); setDay(e.target.value); setExpandedExId(null); }}
   >
     {DAYS.map((d) => (
       <option key={d} value={d}>{d}</option>
@@ -1780,12 +1831,14 @@ const addExerciseToDay = () => {
                         Add
                       </button>
                       <button className="px-4 py-2 rounded-lg bg-gray-200 text-gray-800 hover:bg-gray-300"
-                              onClick={() => setShowAdd(false)}>
+                              onClick={() => {
+                            if (confirm("Cancel adding an exercise? Your selection will be discarded.")) setShowAdd(false);
+                          }}>
                         Cancel
                       </button>
                     </div>
                     <div className="text-xs text-gray-500 mt-2">
-                      (Sets/reps auto-fill from the Excel catalog when available.)
+                      (Sets/reps auto-fill from the catalog when available.)
                     </div>
                   </div>
                 )}
@@ -1865,13 +1918,37 @@ return (
                             </button>
                           )}
 
-                          <button className="px-4 text-red-600 hover:bg-red-50 border-l"
-                                  onClick={(e) => safeTap(e, () => {
-                                    if (confirm("Remove \"" + (ex.name || "this exercise") + "\" from this day? This cannot be undone.")) removeExercise(ex.id);
-                                  })}
-                                  title="Remove exercise">
-                            <Trash2 className="w-5 h-5" />
-                          </button>
+                          <select
+                                  className="px-2 py-1 text-red-600 hover:bg-red-50 border-l text-sm font-medium bg-transparent cursor-pointer"
+                                  title="Remove exercise"
+                                  value=""
+                                  onChange={(e) => {
+                                    const v = e.target.value;
+                                    e.target.value = "";
+                                    if (!v) return;
+                                    const name = ex.name || "this exercise";
+                                    if (v === "this") {
+                                      if (confirm("Remove \"" + name + "\" from " + day + " (Week " + week + ") only?")) removeExercise(ex.id, [week], ex.name);
+                                    } else if (v === "all") {
+                                      if (confirm("Remove \"" + name + "\" from " + day + " in all 12 weeks? This cannot be undone.")) removeExercise(ex.id, "all", ex.name);
+                                    } else if (v === "catalog") {
+                                      if (confirm("Remove \"" + name + "\" from the Add Exercise dropdown list? It will no longer appear when adding exercises. (It stays in this workout.)")) {
+                                        setExerciseList(prev => (prev || []).filter(n => n !== name));
+                                        setExerciseMap(prev => { const next = { ...prev }; delete next[name]; return next; });
+                                      }
+                                    } else {
+                                      const w = parseInt(v, 10);
+                                      if (!isNaN(w) && confirm("Remove \"" + name + "\" from " + day + " (Week " + w + ") only?")) removeExercise(ex.id, [w], ex.name);
+                                    }
+                                  }}>
+                            <option value="" disabled>Remove ▼</option>
+                            <option value="this">This week only</option>
+                            {Array.from({ length: 12 }, (_, i) => i + 1).map((w) => (
+                              <option key={w} value={w}>Week {w} only</option>
+                            ))}
+                            <option value="all">All weeks (this day)</option>
+                            <option value="catalog">From dropdown list only</option>
+                          </select>
                         </div>
 
                         {open && state && (
@@ -2140,10 +2217,6 @@ return (
                   })}
                 </div>
 
-                <button className="mt-6 w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-lg"
-                        onClick={finishWorkout}>
-                  Finish Workout
-                </button>
               </>
             )}
 
@@ -2154,7 +2227,7 @@ return (
                   {Array.from({ length: 12 }, (_, i) => i + 1).map((w) => (
                     <button key={w}
                             className={"rounded-lg border shadow-sm px-5 py-4 font-semibold " + (w === week ? "bg-blue-600 text-white" : "bg-white")}
-                            onClick={() => { discardAllDrafts(); setWeek(w); setView("current"); setExpandedExId(null); }}>
+                            onClick={() => { clearOrderDraft(); setWeek(w); setView("current"); setExpandedExId(null); }}>
                       Week {w}
                     </button>
                   ))}
@@ -2169,7 +2242,7 @@ return (
                   {DAYS.map((d) => (
                     <button key={d}
                             className={"w-full text-left rounded-lg border shadow-sm px-5 py-4 " + (d === day ? "bg-blue-600 text-white" : "bg-white")}
-                            onClick={() => { discardAllDrafts(); setDay(d); setView("current"); setExpandedExId(null); }}>
+                            onClick={() => { clearOrderDraft(); setDay(d); setView("current"); setExpandedExId(null); }}>
                       <div className="font-semibold">{d}</div>
                       <div className={"text-sm " + (d === day ? "text-white/90" : "text-gray-500")}>
                         {WORKOUT_TYPES[d]}
@@ -2180,26 +2253,6 @@ return (
               </div>
             )}
 
-            {view === "data" && (
-              <div>
-                <div className="text-2xl font-bold mb-5">Data Management</div>
-
-                <div className="mt-6 bg-white rounded-lg border shadow p-5">
-                  <div className="font-semibold mb-2">Reset</div>
-                  <button className="w-full bg-red-600 hover:bg-red-700 text-white font-semibold py-3 rounded-lg"
-                          onClick={() => {
-                            if (!confirm("Reset logs (keep program)?")) return;
-                            setProgram(getGuestProgram(templateId || (typeof window !== "undefined" && window.DEFAULT_TEMPLATE_ID) || "nippard_ppl"));
-                            setLogs({});
-                            setWeek(1);
-                            setDay("Monday");
-                            setExpandedExId(null);
-                          }}>
-                    Reset Logs (keep program)
-                  </button>
-                </div>
-              </div>
-            )}
           </div>
 
           {/* Bottom nav */}
@@ -2218,11 +2271,6 @@ return (
               <button className="flex flex-col items-center text-xs" onClick={() => setView("day")}>
                 <Calendar className={"w-6 h-6 " + (view === "day" ? "text-blue-600" : "text-gray-400")} />
                 <div className={view === "day" ? "text-blue-600" : "text-gray-500"}>Day</div>
-              </button>
-
-              <button className="flex flex-col items-center text-xs" onClick={() => setView("data")}>
-                <Database className={"w-6 h-6 " + (view === "data" ? "text-blue-600" : "text-gray-400")} />
-                <div className={view === "data" ? "text-blue-600" : "text-gray-500"}>Data</div>
               </button>
             </div>
           </div>
