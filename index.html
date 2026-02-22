@@ -532,7 +532,6 @@ const App = () => {
       const [dirtyByExId, setDirtyByExId] = useState({});
       const [altDraftById, setAltDraftById] = useState({});
       const [orderDraftByKey, setOrderDraftByKey] = useState({});
-      const [reorderPickId, setReorderPickId] = useState(null);
 
 const TEMPLATES = Array.isArray(window.PROGRAM_TEMPLATES) ? window.PROGRAM_TEMPLATES : [];
 const INITIAL_TEMPLATE_ID = window.DEFAULT_TEMPLATE_ID || (TEMPLATES[0] && TEMPLATES[0].id) || "nippard_ppl";
@@ -1185,7 +1184,6 @@ useEffect(() => {
           delete next[dayKey];
           return next;
         });
-        setReorderPickId(null);
       };
 
       const moveInOrderDraft = (pickId, targetId) => {
@@ -1203,7 +1201,6 @@ useEffect(() => {
       };
 
       const hasOrderDraft = Array.isArray(draftIds) && draftIds.length;
-      const isOrderChanged = hasOrderDraft && (draftIds.join('|') !== baseExercises.map(e=>e.id).join('|'));
 
       const saveOrderDraft = () => {
         if (!Array.isArray(orderDraftByKey[dayKey]) || !orderDraftByKey[dayKey].length) return;
@@ -1514,10 +1511,11 @@ setLogs(prev => {
           moveInOrderDraft(draggedExId, targetExId);
           setRecentlyMovedId(draggedExId);
           setTimeout(() => setRecentlyMovedId(null), 700);
+          setTimeout(() => saveOrderDraft(), 80);
         }
         setDraggedExId(null);
         setDragOverExId(null);
-      }, [draggedExId]);
+      }, [draggedExId, moveInOrderDraft, saveOrderDraft]);
 
       const handleDragEnd = useCallback(() => {
         setDraggedExId(null);
@@ -1787,6 +1785,32 @@ const addExerciseToDay = () => {
                         </button>
                       </div>
 
+                      <div className="w-full border-t pt-3 mt-1 flex flex-wrap gap-3 items-center">
+                        <button
+                          type="button"
+                          className="text-sm text-gray-500 hover:text-gray-700 underline"
+                          onClick={() => {
+                            if (!confirm("Restore the dropdown list to the full default list? This will bring back any exercises you removed with \"From dropdown list only\". Exercises you added yourself will be kept.")) return;
+                            const tpl = getTemplateById(templateId);
+                            const fallback = { list: DEFAULT_EXERCISE_LIST, map: DEFAULT_EXERCISE_MAP };
+                            const defaultList = (tpl?.catalog?.list && Array.isArray(tpl.catalog.list)) ? tpl.catalog.list : fallback.list;
+                            const defaultMap = (tpl?.catalog?.map && typeof tpl.catalog.map === "object") ? tpl.catalog.map : fallback.map;
+                            const defaultSet = new Set(defaultList);
+                            const addedByUser = (exerciseList || []).filter(name => !defaultSet.has(name));
+                            const newList = [...defaultList, ...addedByUser].sort((a, b) => a.localeCompare(b));
+                            const newMap = { ...defaultMap };
+                            addedByUser.forEach(name => { if (exerciseMap[name]) newMap[name] = exerciseMap[name]; });
+                            setExerciseList(newList);
+                            setExerciseMap(newMap);
+                            setAddName(newList?.[0] || "");
+                            alert("Dropdown list restored. Your added exercises were kept.");
+                          }}
+                          title="Bring back all exercises you removed from the dropdown"
+                        >
+                          Restore dropdown list
+                        </button>
+                      </div>
+
                       <div className="w-full border-t pt-3 mt-1 flex flex-wrap gap-3 items-end">
                         <div>
                           <div className="text-xs text-gray-500 mb-1">Add to</div>
@@ -1843,26 +1867,6 @@ const addExerciseToDay = () => {
                   </div>
                 )}
 
-                {(isOrderChanged || reorderPickId) && (
-                  <div className="mb-4 p-3 rounded-lg border bg-blue-50 flex items-center justify-between gap-3">
-                    <div className="text-sm text-blue-900">
-                      Order changed (not saved)
-                      {reorderPickId && (
-                        <span className="ml-2 font-semibold">• Moving: {(baseExercises.find(e => e.id === reorderPickId)?.name || "Exercise")}</span>
-                      )}
-                    </div>
-                    <div className="flex gap-2">
-                      <button className="px-3 py-2 rounded-lg bg-blue-600 text-white font-semibold hover:bg-blue-700"
-                              onClick={saveOrderDraft}>
-                        Save order
-                      </button>
-                      <button className="px-3 py-2 rounded-lg bg-white border text-blue-900 font-semibold hover:bg-blue-100"
-                              onClick={clearOrderDraft}>
-                        Discard
-                      </button>
-                    </div>
-                  </div>
-                )}
                 <div className="space-y-4">
                   {exercises.map((ex) => {
                     const open = expandedExId === ex.id;
@@ -1895,28 +1899,6 @@ return (
                             </div>
                             {open ? <ChevronUp className="w-6 h-6 text-gray-400" /> : <ChevronDown className="w-6 h-6 text-gray-400" />}
                           </button>
-
-                          {!reorderPickId && (
-                            <button className="px-3 text-gray-600 hover:bg-gray-50 border-l"
-                                    onClick={(e) => safeTap(e, () => { ensureOrderDraft(); setReorderPickId(ex.id); })}
-                                    title="Move">
-                              ↕
-                            </button>
-                          )}
-                          {reorderPickId === ex.id && (
-                            <button className="px-3 text-gray-600 hover:bg-gray-50 border-l"
-                                    onClick={(e) => safeTap(e, () => setReorderPickId(null))}
-                                    title="Cancel move">
-                              ✕
-                            </button>
-                          )}
-                          {reorderPickId && reorderPickId !== ex.id && (
-                            <button className="px-4 text-blue-600 hover:bg-blue-50 border-l font-semibold"
-                                    onClick={(e) => safeTap(e, () => { moveInOrderDraft(reorderPickId, ex.id); setRecentlyMovedId(reorderPickId); setTimeout(() => setRecentlyMovedId(null), 700); setReorderPickId(null); })}
-                                    title="Drop here">
-                              Drop
-                            </button>
-                          )}
 
                           <select
                                   className="px-2 py-1 text-red-600 hover:bg-red-50 border-l text-sm font-medium bg-transparent cursor-pointer"
