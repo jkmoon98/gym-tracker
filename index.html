@@ -621,33 +621,40 @@ const applyingRemoteRef = useRef(false);
         // We store progress per-template so Nippard and RP have separate logs/state.
         const activeId = stateObj?.templateId || templateId;
 
-        const payload = {
-          activeTemplateId: activeId,
-          templates: {
-            [activeId]: {
-              program: stateObj.program,
-              logs: stateObj.logs,
-              week: stateObj.week,
-              day: stateObj.day,
-              catalog: stateObj.catalog || null,
-            },
-          },
+        const templateData = {
+          program: stateObj.program,
+          logs: stateObj.logs,
+          week: stateObj.week,
+          day: stateObj.day,
+          catalog: stateObj.catalog || null,
         };
 
-        const json = JSON.stringify(payload);
+        const json = JSON.stringify({ activeTemplateId: activeId, templates: { [activeId]: templateData } });
         if (json === lastCloudJsonRef.current) return;
 
         if (cloudSyncTimerRef.current) clearTimeout(cloudSyncTimerRef.current);
         cloudSyncTimerRef.current = setTimeout(async () => {
           try {
             setCloudStatus("syncing");
-            await db.collection("users").doc(user.uid).set(
-              {
-                ...payload,
+            const docRef = db.collection("users").doc(user.uid);
+            try {
+              await docRef.update({
+                activeTemplateId: activeId,
+                ["templates." + activeId]: templateData,
                 updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-              },
-              { merge: true }
-            );
+              });
+            } catch (updateErr) {
+              if (updateErr?.code === "not-found" || updateErr?.message?.includes("NOT_FOUND")) {
+                await docRef.set(
+                  {
+                    activeTemplateId: activeId,
+                    templates: { [activeId]: templateData },
+                    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                  },
+                  { merge: true }
+                );
+              } else throw updateErr;
+            }
             lastCloudJsonRef.current = json;
 
             // Update baseline for Discard/dirty tracking (workout state only)
