@@ -1481,6 +1481,34 @@ setLogs(prev => {
         });
       };
 
+      const addExerciseToWeeks = (ex, targetWeeks) => {
+        const weeksToAdd = targetWeeks === "all" ? WEEKS : (Array.isArray(targetWeeks) ? targetWeeks : [targetWeeks]);
+        const name = (ex.name || "").trim();
+        if (!name) return;
+        const updateData = { sets: ex.sets ?? "", reps: ex.reps ?? "", defaultWorking: ex.defaultWorking ?? 2, alternatives: ex.alternatives || [] };
+        setProgram(prev => {
+          const next = structuredClone(prev);
+          for (const w of weeksToAdd) {
+            if (!next[w]) next[w] = {};
+            if (!next[w][day]) next[w][day] = [];
+            const arr = next[w][day];
+            const idx = arr.findIndex(e => (e.name || "").trim() === name);
+            if (idx >= 0) {
+              arr[idx] = { ...arr[idx], ...updateData };
+            } else {
+              const maxOrder = arr.reduce((m, e) => Math.max(m, (e.order ?? 0)), -1);
+              arr.push({
+                id: uuid(),
+                order: maxOrder + 1,
+                name: ex.name,
+                ...updateData,
+              });
+            }
+          }
+          return next;
+        });
+      };
+
       const moveExerciseOrder = (exId, dir) => {
         // dir: -1 up, +1 down
         const sorted = (program?.[week]?.[day] || []).slice().sort((a,b)=>((a.order ?? 0) - (b.order ?? 0)));
@@ -1991,6 +2019,40 @@ return (
                             ))}
                             <option value="all">All weeks (this day)</option>
                             <option value="catalog">From dropdown list only</option>
+                          </select>
+                          <select
+                                  className="px-2 py-1 text-green-600 hover:bg-green-50 border-l text-sm font-medium bg-transparent cursor-pointer"
+                                  title="Add exercise"
+                                  value=""
+                                  onChange={(e) => {
+                                    const v = e.target.value;
+                                    e.target.value = "";
+                                    if (!v) return;
+                                    const name = ex.name || "this exercise";
+                                    if (v === "this") {
+                                      if (confirm("Add another \"" + name + "\" to " + day + " (Week " + week + ")?")) addExerciseToWeeks(ex, [week]);
+                                    } else if (v === "all") {
+                                      if (confirm("Add \"" + name + "\" to " + day + " in all 12 weeks?")) addExerciseToWeeks(ex, "all");
+                                    } else if (v === "catalog") {
+                                      if (!exerciseList.includes(name)) {
+                                        setExerciseList(prev => [...prev, name].sort((a,b) => a.localeCompare(b)));
+                                        setExerciseMap(prev => prev[name] ? prev : { ...prev, [name]: { sets: ex.sets || "", reps: ex.reps || "", defaultWorking: ex.defaultWorking ?? 2, alternatives: ex.alternatives || [] } });
+                                        alert("Added \"" + name + "\" to the Add Exercise dropdown.");
+                                      } else {
+                                        alert("\"" + name + "\" is already in the dropdown.");
+                                      }
+                                    } else {
+                                      const w = parseInt(v, 10);
+                                      if (!isNaN(w) && confirm("Add \"" + name + "\" to " + day + " (Week " + w + ")?")) addExerciseToWeeks(ex, [w]);
+                                    }
+                                  }}>
+                            <option value="" disabled>Add ▼</option>
+                            <option value="this">This week only</option>
+                            {WEEKS.map((w) => (
+                              <option key={w} value={w}>Week {w} only</option>
+                            ))}
+                            <option value="all">All weeks (this day)</option>
+                            <option value="catalog">To dropdown list only</option>
                           </select>
                         </div>
 
