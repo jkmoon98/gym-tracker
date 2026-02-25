@@ -155,13 +155,11 @@ const ensureXLSX = () =>
       // Update callback ref (doesn't cause re-render)
       onChangeRef.current = onChange;
       
-      // Reset local value ONLY when inputKey changes (switching rows/exercises)
+      // Sync local value when inputKey changes (switching rows) or value changes (e.g. "Use last week")
       useEffect(() => {
-        if (prevInputKeyRef.current !== inputKey) {
-          prevInputKeyRef.current = inputKey;
-          setLocalValue(valueRef.current || "");
-        }
-      }, [inputKey]);
+        if (prevInputKeyRef.current !== inputKey) prevInputKeyRef.current = inputKey;
+        setLocalValue(valueRef.current ?? "");
+      }, [inputKey, value]);
       
       return (
         <input
@@ -180,7 +178,7 @@ const ensureXLSX = () =>
         />
       );
     }, (prev, next) => {
-      return prev.inputKey === next.inputKey;
+      return prev.inputKey === next.inputKey && prev.value === next.value;
     });
 
     // Memoized row to prevent re-renders
