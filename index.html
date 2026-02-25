@@ -2351,7 +2351,33 @@ return (
                                   <Plus className="w-5 h-5" />
                                 </button>
                               </div>
-
+                              {(() => {
+                                const prevWorking = week > 1 && (() => {
+                                  const prevEx = (program?.[week - 1]?.[day] || []).find(e => (e.name || "").trim() === (ex.name || "").trim());
+                                  return prevEx ? (logs?.[week - 1]?.[day]?.[prevEx.id]?.working || []) : null;
+                                })();
+                                if (!prevWorking || !prevWorking.some(r => (r.weight || r.reps || "").trim())) return null;
+                                return (
+                                  <div className="flex items-center gap-2 mb-2">
+                                    <span className="text-xs text-gray-500">Last week: {prevWorking.map(r => ((r.weight || "") + (r.weight && r.reps ? "×" : "") + (r.reps || "")).trim() || "—").join(", ")}</span>
+                                    <button
+                                      type="button"
+                                      className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200 text-gray-700"
+                                      onClick={() => {
+                                        const cur = getExerciseLog(ex);
+                                        const curWorking = cur.working || [];
+                                        const merged = curWorking.map((r, i) => {
+                                          const prev = prevWorking[i];
+                                          return prev ? { ...r, weight: prev.weight || r.weight, reps: prev.reps || r.reps } : r;
+                                        });
+                                        updateExerciseLog(ex, c => ({ ...c, working: merged }));
+                                        markDirty(ex.id);
+                                      }}>
+                                      Use last week
+                                    </button>
+                                  </div>
+                                );
+                              })()}
                               <div className="space-y-2">
                                 {(state.working || []).map((row) => (
                                   <SetRow 
