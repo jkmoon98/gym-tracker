@@ -1509,6 +1509,36 @@ setLogs(prev => {
         });
       };
 
+      const addDayToWeeks = (targetWeeks) => {
+        const weeksToAdd = targetWeeks === "all" ? WEEKS : (Array.isArray(targetWeeks) ? targetWeeks : [targetWeeks]);
+        const dayExercises = (program?.[week]?.[day] || []).slice().sort((a, b) => ((a.order ?? 0) - (b.order ?? 0)));
+        if (!dayExercises.length) {
+          alert("No exercises in this day to add.");
+          return;
+        }
+        setProgram(prev => {
+          const next = structuredClone(prev);
+          for (const ex of dayExercises) {
+            const name = (ex.name || "").trim();
+            if (!name) continue;
+            const updateData = { sets: ex.sets ?? "", reps: ex.reps ?? "", defaultWorking: ex.defaultWorking ?? 2, alternatives: ex.alternatives || [] };
+            for (const w of weeksToAdd) {
+              if (!next[w]) next[w] = {};
+              if (!next[w][day]) next[w][day] = [];
+              const arr = next[w][day];
+              const idx = arr.findIndex(e => (e.name || "").trim() === name);
+              if (idx >= 0) {
+                arr[idx] = { ...arr[idx], ...updateData };
+              } else {
+                const maxOrder = arr.reduce((m, e) => Math.max(m, (e.order ?? 0)), -1);
+                arr.push({ id: uuid(), order: maxOrder + 1, name: ex.name, ...updateData });
+              }
+            }
+          }
+          return next;
+        });
+      };
+
       const moveExerciseOrder = (exId, dir) => {
         // dir: -1 up, +1 down
         const sorted = (program?.[week]?.[day] || []).slice().sort((a,b)=>((a.order ?? 0) - (b.order ?? 0)));
@@ -1776,10 +1806,34 @@ const addExerciseToDay = () => {
               <>
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
                   <div className="text-lg font-semibold text-gray-800">Workout</div>
-                  <button className="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
-                          onClick={() => setShowAdd(v => !v)}>
-                    + Add Exercise
-                  </button>
+                  <div className="flex flex-wrap gap-2 items-center">
+                    <select
+                      className="px-3 py-2 rounded-lg bg-green-600 text-white hover:bg-green-700 text-sm font-medium cursor-pointer border-0"
+                      value=""
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        e.target.value = "";
+                        if (!v) return;
+                        if (v === "all") {
+                          if (confirm("Add this " + day + " workout to all 12 weeks? Existing exercises will be updated.")) addDayToWeeks("all");
+                        } else {
+                          const w = parseInt(v, 10);
+                          if (!isNaN(w) && confirm("Add this " + day + " workout to Week " + w + "? Existing exercises will be updated.")) addDayToWeeks([w]);
+                        }
+                      }}
+                      title="Add this day's workouts to other weeks"
+                    >
+                      <option value="" disabled>+ Add day to ▼</option>
+                      {WEEKS.map((w) => (
+                        <option key={w} value={w}>Week {w} only</option>
+                      ))}
+                      <option value="all">All weeks</option>
+                    </select>
+                    <button className="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
+                            onClick={() => setShowAdd(v => !v)}>
+                      + Add Exercise
+                    </button>
+                  </div>
                 </div>
 
                 {showAdd && (
