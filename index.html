@@ -578,6 +578,7 @@ const getGuestProgram = useCallback((id) => {
       // --- Auth + per-user storage key + cloud sync (Firestore) ---
       const [user, setUser] = useState(null);
       const [cloudStatus, setCloudStatus] = useState("local"); // local | syncing | synced | error
+      const [isCloudLoading, setIsCloudLoading] = useState(false); // true until first Firestore load completes (signed-in only)
 const hydratedRef = useRef(false); 
 // true after we load from Firestore for this user (prevents overwriting cloud with defaults)
 
@@ -932,6 +933,7 @@ const [addName, setAddName] = useState((exerciseList?.[0]) || "");
         if (!user) {
           hydratedRef.current = false;
           loadedTemplateIdRef.current = null;
+          setIsCloudLoading(false);
           setCloudStatus("local");
           setProgram(() => getGuestProgram(templateId));
           setLogs({});
@@ -948,6 +950,7 @@ const [addName, setAddName] = useState((exerciseList?.[0]) || "");
         if (!db) return;
 
         hydratedRef.current = false;
+        setIsCloudLoading(true);
 
         const applyTemplateState = (id, tpl) => {
           const fallbackTpl = getTemplateById(id);
@@ -1025,6 +1028,7 @@ const nextProgram = ensureExerciseMeta(
               );
               applyTemplateState(seedId, seed.templates[seedId]);
               hydratedRef.current = true;
+              setIsCloudLoading(false);
               setCloudStatus("synced");
               return;
             }
@@ -1098,9 +1102,12 @@ try { localStorage.setItem(TEMPLATE_ID_KEY, activeId); } catch {}
             }
 
             hydratedRef.current = true;
+            setIsCloudLoading(false);
             setCloudStatus("synced");
           } catch (e) {
             console.warn("Cloud load failed:", e);
+            hydratedRef.current = true;
+            setIsCloudLoading(false);
             setCloudStatus("error");
           }
         })();
@@ -1619,6 +1626,14 @@ const addExerciseToDay = () => {
 
       return (
         <div className="min-h-screen pb-24">
+          {user && isCloudLoading && (
+            <div className="fixed inset-0 z-[9998] bg-white/90 flex items-center justify-center" role="alert" aria-busy="true">
+              <div className="text-center">
+                <div className="animate-pulse text-lg font-semibold text-gray-800 mb-2">Loading your workouts…</div>
+                <div className="text-sm text-gray-500">Please wait for cloud data to load before editing.</div>
+              </div>
+            </div>
+          )}
           {/* Header */}
           <div className="bg-blue-600 text-white shadow">
             <div className="max-w-6xl mx-auto px-3 sm:px-5 py-3 sm:py-4 flex flex-col sm:flex-row items-start sm:items-start justify-between gap-3">
