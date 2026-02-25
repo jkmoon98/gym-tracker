@@ -2072,6 +2072,26 @@ return (
                                         return next;
                                       });
                                     }}
+                                    onBlur={(e) => {
+                                      const val = (e.target.value ?? "").trim();
+                                      const n = parseInt(val, 10);
+                                      if (!isNaN(n) && n >= 0) {
+                                        const cur = getExerciseLog(ex);
+                                        const working = cur.working || [];
+                                        if (working.length < n) {
+                                          updateExerciseLog(ex, c => {
+                                            const next = [...(c.working || [])];
+                                            while (next.length < n) next.push(makeRow(String(next.length + 1)));
+                                            return { ...c, working: next };
+                                          });
+                                        } else if (working.length > n && n > 0) {
+                                          updateExerciseLog(ex, c => {
+                                            const next = (c.working || []).slice(0, n).map((r, i) => ({ ...r, label: String(i + 1) }));
+                                            return { ...c, working: next };
+                                          });
+                                        }
+                                      }
+                                    }}
                                   />
                                 </div>
                                 <div>
