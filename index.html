@@ -909,12 +909,21 @@ if (tpl.program) setProgram(ensureExerciseMeta(tpl.program));
             const tpl = data.templates?.[activeId];
             if (!tpl) return;
             const cloudJson = JSON.stringify({ program: tpl.program, logs: tpl.logs, week: tpl.week, day: tpl.day });
-            if (cloudJson !== lastCloudJsonRef.current) setOtherTabUpdated(true);
+            const ours = savedJsonRef.current;
+            if (!ours) return;
+            // Skip if we have unsaved changes - diff would be our edits, not another tab
+            const cur = JSON.stringify({ program, logs, week, day });
+            if (ours !== cur) return;
+            try {
+              const oursParsed = JSON.parse(ours);
+              const oursJson = JSON.stringify({ program: oursParsed.program, logs: oursParsed.logs, week: oursParsed.week, day: oursParsed.day });
+              if (cloudJson !== oursJson) setOtherTabUpdated(true);
+            } catch (_) {}
           }).catch(() => {});
         };
         document.addEventListener("visibilitychange", onVisible);
         return () => document.removeEventListener("visibilitychange", onVisible);
-      }, [user, templateId]);
+      }, [user, templateId, program, logs, week, day]);
 
       useEffect(() => {
         // Initialize baseline once, after the first render
