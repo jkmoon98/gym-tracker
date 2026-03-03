@@ -892,39 +892,6 @@ if (tpl.program) setProgram(ensureExerciseMeta(tpl.program));
       }, [clearAllDirty]);
 
       const [dirty, setDirty] = useState(false);
-      const [otherTabUpdated, setOtherTabUpdated] = useState(false);
-
-      // When tab becomes visible, check if cloud data changed (e.g. another tab synced).
-      useEffect(() => {
-        if (!user || !firebaseReady()) return;
-        const onVisible = () => {
-          if (document.visibilityState !== "visible") return;
-          const { db } = initFirebase();
-          if (!db) return;
-          const docRef = db.collection("users").doc(user.uid);
-          docRef.get().then(snap => {
-            if (!snap.exists) return;
-            const data = snap.data() || {};
-            const activeId = data.activeTemplateId || templateId;
-            const tpl = data.templates?.[activeId];
-            if (!tpl) return;
-            const cloudJson = JSON.stringify({ program: tpl.program, logs: tpl.logs, week: tpl.week, day: tpl.day });
-            const ours = savedJsonRef.current;
-            if (!ours) return;
-            // Skip if we have unsaved changes - diff would be our edits, not another tab
-            const cur = JSON.stringify({ program, logs, week, day });
-            if (ours !== cur) return;
-            try {
-              const oursParsed = JSON.parse(ours);
-              const oursJson = JSON.stringify({ program: oursParsed.program, logs: oursParsed.logs, week: oursParsed.week, day: oursParsed.day });
-              if (cloudJson !== oursJson) setOtherTabUpdated(true);
-            } catch (_) {}
-          }).catch(() => {});
-        };
-        document.addEventListener("visibilitychange", onVisible);
-        return () => document.removeEventListener("visibilitychange", onVisible);
-      }, [user, templateId, program, logs, week, day]);
-
       useEffect(() => {
         // Initialize baseline once, after the first render
         if (savedJsonRef.current === null) savedJsonRef.current = currentJson;
@@ -1746,15 +1713,6 @@ const addExerciseToDay = () => {
               <div className="text-center">
                 <div className="animate-pulse text-lg font-semibold text-gray-800 mb-2">Loading your workouts…</div>
                 <div className="text-sm text-gray-500">Please wait for cloud data to load before editing.</div>
-              </div>
-            </div>
-          )}
-          {user && otherTabUpdated && (
-            <div className="fixed top-0 left-0 right-0 z-[9997] bg-amber-100 border-b border-amber-300 px-4 py-2 flex items-center justify-between gap-3 text-sm">
-              <span className="text-amber-900">Data may have been updated in another tab.</span>
-              <div className="flex gap-2">
-                <button className="px-3 py-1 bg-amber-200 hover:bg-amber-300 rounded font-medium" onClick={() => { setOtherTabUpdated(false); window.location.reload(); }}>Refresh</button>
-                <button className="px-3 py-1 text-amber-800 hover:underline" onClick={() => setOtherTabUpdated(false)}>Dismiss</button>
               </div>
             </div>
           )}
