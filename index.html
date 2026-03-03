@@ -622,6 +622,9 @@ const applyingRemoteRef = useRef(false);
 
       const cloudSyncTimerRef = useRef(null);
       const lastCloudJsonRef = useRef("");
+      const tabIdRef = useRef(null);
+      const receivedSyncFromOtherTabRef = useRef(false);
+      if (!tabIdRef.current) tabIdRef.current = (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : "t-" + Date.now();
 
       const pushToCloudDebounced = useCallback((stateObj) => {
         if (!firebaseReady() || !user) return;
@@ -667,6 +670,7 @@ const applyingRemoteRef = useRef(false);
               } else throw updateErr;
             }
             lastCloudJsonRef.current = json;
+            try { if (typeof BroadcastChannel !== "undefined") new BroadcastChannel("gym-tracker-sync").postMessage({ tabId: tabIdRef.current }); } catch (_) {}
 
             // Update baseline for Discard/dirty tracking (workout state only)
             try {
@@ -892,6 +896,25 @@ if (tpl.program) setProgram(ensureExerciseMeta(tpl.program));
       }, [clearAllDirty]);
 
       const [dirty, setDirty] = useState(false);
+      const [otherTabSynced, setOtherTabSynced] = useState(false);
+      useEffect(() => {
+        if (typeof BroadcastChannel === "undefined" || !user) return;
+        const ch = new BroadcastChannel("gym-tracker-sync");
+        ch.onmessage = (e) => {
+          if (e.data?.tabId && e.data.tabId !== tabIdRef.current) receivedSyncFromOtherTabRef.current = true;
+        };
+        return () => ch.close();
+      }, [user]);
+      useEffect(() => {
+        if (!user) return;
+        const onVisible = () => {
+          if (document.visibilityState !== "visible") return;
+          if (receivedSyncFromOtherTabRef.current) { receivedSyncFromOtherTabRef.current = false; setOtherTabSynced(true); }
+        };
+        document.addEventListener("visibilitychange", onVisible);
+        return () => document.removeEventListener("visibilitychange", onVisible);
+      }, [user]);
+
       useEffect(() => {
         // Initialize baseline once, after the first render
         if (savedJsonRef.current === null) savedJsonRef.current = currentJson;
@@ -1713,6 +1736,15 @@ const addExerciseToDay = () => {
               <div className="text-center">
                 <div className="animate-pulse text-lg font-semibold text-gray-800 mb-2">Loading your workouts…</div>
                 <div className="text-sm text-gray-500">Please wait for cloud data to load before editing.</div>
+              </div>
+            </div>
+          )}
+          {user && otherTabSynced && (
+            <div className="fixed top-0 left-0 right-0 z-[9997] bg-amber-100 border-b border-amber-300 px-4 py-2 flex items-center justify-between gap-3 text-sm">
+              <span className="text-amber-900">Another tab synced. Refresh to load the latest?</span>
+              <div className="flex gap-2">
+                <button className="px-3 py-1 bg-amber-200 hover:bg-amber-300 rounded font-medium" onClick={() => { setOtherTabSynced(false); window.location.reload(); }}>Refresh</button>
+                <button className="px-3 py-1 text-amber-800 hover:underline" onClick={() => setOtherTabSynced(false)}>Dismiss</button>
               </div>
             </div>
           )}
